@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.chowdahh.com/signal.schema.json",
+  "title": "Signal",
+  "type": "object",
+  "required": ["signal_type", "card_id"],
+  "properties": {
+    "signal_type": {
+      "type": "string",
+      "enum": ["seen", "open", "save", "share", "dismiss", "source_open"]
+    },
+    "topic_id": {
+      "type": "string"
+    },
+    "card_id": {
+      "type": "string"
+    },
+    "submission_id": {
+      "type": "string"
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "shared_to": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

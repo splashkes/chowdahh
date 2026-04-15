@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(node:*)",
+      "Bash(npm run:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(find:*)",
+      "Bash(go build:*)",
+      "Bash(go vet:*)",
+      "Bash(bash deploy/ec2/deploy.sh)",
+      "Bash(ls -la /Users/splash/Ohpan/internal/db/*.go)",
+      "Bash(ssh wem-1 'psql '\\\\''postgres://kite:kite@localhost:5432/wem?search_path=kite,public'\\\\'' -c \":*)",
+      "Bash(ssh wem-1:*)",
+      "Bash(ls /Users/splash/Ohpan/migrations/04*.sql)",
+      "Bash(go mod:*)",
+      "Bash(go get:*)",
+      "Bash(/tmp/chowdahh-tui)",
+      "Bash(curl -s 'https://chowdahh.com/api/v1/streams/top?limit=3')",
+      "Bash(python3 -c ':*)",
+      "Bash(curl -s 'https://chowdahh.com/api/v1/streams/top?limit=1')"
+    ]
+  }
+}

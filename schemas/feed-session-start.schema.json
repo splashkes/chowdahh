@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.chowdahh.com/feed-session-start.schema.json",
+  "title": "FeedSessionStart",
+  "type": "object",
+  "required": ["intent"],
+  "properties": {
+    "intent": {
+      "type": "string",
+      "enum": ["browse"]
+    },
+    "budget_minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60
+    },
+    "include_controls": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

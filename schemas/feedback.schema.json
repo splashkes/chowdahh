@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.chowdahh.com/feedback.schema.json",
+  "title": "Feedback",
+  "type": "object",
+  "required": ["feedback_type", "title"],
+  "properties": {
+    "person_id": {
+      "type": "string"
+    },
+    "feedback_type": {
+      "type": "string",
+      "enum": ["content_request", "bug_report", "feature_request", "quality_report"]
+    },
+    "title": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "string"
+    },
+    "topic_id": {
+      "type": "string"
+    },
+    "card_id": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

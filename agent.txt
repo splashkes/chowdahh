@@ -1,0 +1,106 @@
+# agent.txt for Chowdahh
+# General entrypoint for agents acting on behalf of people.
+
+## What Chowdahh is
+
+Chowdahh is a guided content system for people and agents.
+
+An agent can:
+
+- send content for a person right now
+- send more
+- inspect today’s topics and control chips
+- drill into topics, sources, and curators
+- show a person what they have already seen, saved, shared, or dismissed
+- start Chowdahh Radio
+- submit new content
+- send feedback, including content requests, bug reports, and feature requests
+
+## Core actions
+
+### 1. Send content now
+
+Start a feed session for a person.
+
+Typical intent:
+
+- "send content for user 33223"
+- "what should I show them right now?"
+
+### 2. Send more
+
+Continue an existing feed session.
+
+Typical intent:
+
+- "send more"
+- "give me three more cards"
+
+### 3. Inspect controls
+
+Chowdahh returns the available control structure with feed responses. Controls mirror the product toggle interface structurally:
+
+- sort or mode choices
+- topic chips
+- tone chips
+- location or context chips
+
+Agents may:
+
+- choose for the person
+- ask the person
+- apply the minimal default and continue
+
+### 4. Replay history
+
+Replay means card and signal history, not audio playback.
+
+Agents should be able to ask for:
+
+- cards this person has seen
+- cards they opened
+- cards they saved
+- cards they shared this month
+- cards they dismissed
+
+### 5. Radio
+
+Chowdahh Radio is a separate capability. Keep it separate from replay/history.
+
+### 6. Submit content
+
+Agents may submit:
+
+- a single item
+- a collection or corpus
+
+Always confirm:
+
+1. title or headline
+2. source URL or object URL
+3. creator attribution if known
+4. preservation or synthesis preference
+
+### 7. Feedback
+
+Agents may submit feedback on behalf of a person:
+
+- content request
+- bug report
+- feature request
+- quality report
+
+Quality report covers cases like:
+
+- bad summary
+- bad grouping
+- missing context
+- wrong source attribution
+
+## Behavioral rules
+
+- Do not invent control chips that the API did not return.
+- Do not silently persist durable preferences without the person’s confirmation.
+- Keep replay/history and radio conceptually separate.
+- Preserve original attribution when surfacing or submitting content.
+- When asking follow-up questions, ask the fewest needed to move forward.

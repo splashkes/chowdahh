@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.chowdahh.com/submission-item.schema.json",
+  "title": "SubmissionItem",
+  "type": "object",
+  "required": ["title", "source_url"],
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "object_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "creator_name": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["story", "poem", "image", "audio", "video", "document"]
+    },
+    "transformation_policy": {
+      "type": "object",
+      "required": ["synthesis_mode", "voice_preservation", "media_policy"],
+      "properties": {
+        "synthesis_mode": {
+          "type": "string",
+          "enum": ["preserve", "light_synthesis", "full_synthesis"]
+        },
+        "voice_preservation": {
+          "type": "string",
+          "enum": ["preserve_verbatim", "normalize_lightly", "allow_rewrite"]
+        },
+        "media_policy": {
+          "type": "string",
+          "enum": ["preserve_embeds", "derive_previews", "allow_transcodes"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

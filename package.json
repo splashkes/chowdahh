@@ -1,0 +1,15 @@
+{
+  "name": "chowdahh_recipes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AX-first Chowdahh companion surfaces, examples, and skills.",
+  "scripts": {
+    "check": "node --check src/client.js src/index.js examples/fresh-content.js examples/send-more.js examples/review-history.js examples/start-radio.js examples/submit-feedback.js examples/submit-collection.js examples/sync-preferences.js examples/test-all.js",
+    "test": "node examples/test-all.js",
+    "test:prod": "CHOWDAHH_BASE_URL=https://chowdahh.com node examples/test-all.js",
+    "live": "node examples/live/server.js",
+    "tui": "cd examples/tui && go run .",
+    "tui:build": "cd examples/tui && go build -o ../../chowdahh-tui ."
+  }
+}

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chowdahh Live</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="screen">
+    <!-- Start screen — needed to unlock TTS -->
+    <div id="start-screen">
+      <h1>CHOWDAHH</h1>
+      <p>click anywhere to start broadcast</p>
+    </div>
+
+    <!-- Progress bar -->
+    <div id="progress"><div id="progress-bar"></div></div>
+
+    <!-- Live badge -->
+    <div id="live-badge"><span class="live-dot"></span> LIVE</div>
+
+    <!-- Story counter -->
+    <div id="counter"></div>
+
+    <!-- Controls -->
+    <div id="controls">
+      <button class="control-btn" id="mute-btn" title="Toggle voice">&#x1f50a;</button>
+      <button class="control-btn" id="pause-btn" title="Pause / resume">&#x23f8;</button>
+    </div>
+
+    <!-- Two story layers for crossfade -->
+    <div class="story active" id="story-a">
+      <div class="story-bg"></div>
+      <div class="story-content">
+        <div class="story-meta"></div>
+        <h1 class="headline"></h1>
+        <p class="summary"></p>
+        <div class="topics"></div>
+      </div>
+    </div>
+    <div class="story" id="story-b">
+      <div class="story-bg"></div>
+      <div class="story-content">
+        <div class="story-meta"></div>
+        <h1 class="headline"></h1>
+        <p class="summary"></p>
+        <div class="topics"></div>
+      </div>
+    </div>
+
+    <!-- Ticker -->
+    <div id="ticker">
+      <div class="ticker-label">CHOWDAHH</div>
+      <div class="ticker-window">
+        <div class="ticker-track" id="ticker-track"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
