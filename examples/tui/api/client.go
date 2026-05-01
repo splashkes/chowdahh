@@ -47,7 +47,7 @@ func (c *Client) RateInfo() (*RateLimit, string) {
 func (c *Client) GetStream(slug string, limit int, cursor string) (*Envelope[StreamData], error) {
 	q := url.Values{"limit": {strconv.Itoa(limit)}}
 	if cursor != "" {
-		q.Set("cursor", cursor)
+		q.Set("offset", cursor)
 	}
 	var env Envelope[StreamData]
 	if err := c.get(fmt.Sprintf("/api/v1/streams/%s?%s", url.PathEscape(slug), q.Encode()), &env); err != nil {

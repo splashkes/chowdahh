@@ -33,6 +33,31 @@ func TestGetCategoriesUsesStreamDiscoveryEndpoint(t *testing.T) {
 	}
 }
 
+func TestGetStreamUsesOffsetForNextCursor(t *testing.T) {
+	var rawQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawQuery = r.URL.RawQuery
+		json.NewEncoder(w).Encode(Envelope[StreamData]{
+			Data: StreamData{
+				Stream: "top",
+				Items:  []Card{{ID: "card-2", Headline: "Second page"}},
+				Count:  1,
+			},
+			Meta: &Meta{NextCursor: "20", HasMore: true},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "")
+	_, err := client.GetStream("top", 10, "20")
+	if err != nil {
+		t.Fatalf("GetStream returned error: %v", err)
+	}
+	if rawQuery != "limit=10&offset=20" {
+		t.Fatalf("query = %q, want limit=10&offset=20", rawQuery)
+	}
+}
+
 func TestSearchDecodesLiveResultsShape(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search" {

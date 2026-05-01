@@ -1,6 +1,8 @@
 package screens
 
 import (
+	"fmt"
+
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,6 +26,8 @@ type CardListModel struct {
 	width   int
 	height  int
 }
+
+const streamPageSize = 10
 
 func NewCardListModel(client *api.Client, slug string, width, height int) CardListModel {
 	sp := spinner.New()
@@ -50,7 +54,7 @@ func NewCardListModel(client *api.Client, slug string, width, height int) CardLi
 func (m CardListModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
-		umsg.FetchStream(m.client, m.slug, 20, ""),
+		umsg.FetchStream(m.client, m.slug, streamPageSize, ""),
 	)
 }
 
@@ -102,7 +106,7 @@ func (m CardListModel) Update(msg tea.Msg) (CardListModel, tea.Cmd) {
 				m.loading = true
 				return m, tea.Batch(
 					m.spinner.Tick,
-					umsg.FetchStream(m.client, m.slug, 20, m.cursor),
+					umsg.FetchStream(m.client, m.slug, streamPageSize, m.cursor),
 				)
 			}
 		}
@@ -120,9 +124,14 @@ func (m CardListModel) View() string {
 	if m.errMsg != "" {
 		return "\n  " + style.Error.Render("Error: "+m.errMsg) + "\n\n  Press esc to go back"
 	}
+	if !m.loading && len(m.cards) == 0 {
+		return "\n  " + style.Title.Render(m.slug) + "\n\n  " +
+			style.Dim.Render("No cards returned for this stream right now.") +
+			"\n\n  Press esc to go back"
+	}
 	v := m.list.View()
 	if m.loading {
-		v += "\n  " + m.spinner.View() + " Loading more…"
+		v += fmt.Sprintf("\n  %s Loading %s…", m.spinner.View(), m.slug)
 	}
 	return v
 }
