@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: Chowdahh Agent API
-  version: 0.2.0-draft
-  summary: Full draft contract for Chowdahh's AX-first agent surface.
+  version: 0.3.0-reconciled
+  summary: Reconciled v1 contract for Chowdahh's AX-first agent surface.
   description: |
-    This specification defines the draft v1 machine contract for Chowdahh.
+    This specification defines the v1 machine contract for Chowdahh.
 
     Core intent groups:
     - feed sessions
@@ -13,24 +13,46 @@ info:
     - preferences
     - submissions
     - feedback
+    - signals
+    - public discovery (streams, categories, search, topic and curator drill-down)
 
     The matching narrative contract is documented in
-    `docs/api/contract-spec.md`.
+    `docs/api/contract-spec.md`. Where the two disagreed prior to this version,
+    the narrative contract and live behavior took precedence over the spec.
+    Version 0.3.0-reconciled aligns the spec with the canonical contract and
+    introduces MCP-friendly metadata (see `x-mcp-*` extensions and the
+    `Reasoning` schema).
+
+    ## Two senses of "agent"
+
+    The term is overloaded:
+
+    - The **human agent** (the principal of the bearer token) — a Person or
+      Curator who owns resources and accrues signal history. Authorization
+      keys off this principal.
+    - The **AI agent** (the runtime acting on the human's behalf) — an LLM-
+      driven client invoking endpoints. Telemetry, rate-shaping, and
+      attribution use the `X-Chowdahh-Agent-*` headers to identify this
+      runtime distinct from the bearer principal.
+
+    See §3 in the narrative contract for the delegation model and the
+    `x-mcp-principal` extension on each operation for which sense each
+    operation reasons about.
 servers:
   - url: https://chowdahh.com
 tags:
   - name: Feed
     description: Start, inspect, and continue feed sessions.
   - name: Discovery
-    description: Public lanes, topic lookup, curator lookup, and search.
+    description: Public lanes, topic lookup, curator lookup, search, categories, and stream listing.
   - name: Replay
-    description: History and aggregated activity.
+    description: History and aggregated activity for the authenticated person.
   - name: Radio
-    description: Radio-mode session management.
+    description: Chowdahh Radio session management and audio streaming.
   - name: Preferences
     description: Durable person-level Chowdahh preferences.
   - name: Submissions
-    description: Content ingestion surfaces.
+    description: Content ingestion surfaces for items and collections.
   - name: Signals
     description: Interaction event recording.
   - name: Feedback
@@ -44,8 +66,21 @@ paths:
       operationId: startFeedSession
       summary: Start a feed session for a person.
       description: |
-        Creates a new feed session. This is the default "send content now"
-        entrypoint for agents.
+        Creates a new feed session for the bearer principal. This is the
+        default "send content now" entrypoint for AI agents. The session is
+        identified by the bearer token, not a request body field.
+
+        The server applies durable preferences automatically when present.
+        Returns the initial card slice plus the available control state.
+        Sessions are stored in Redis with a 12-hour TTL.
+
+        Use this when a person asks for content. Use `continueFeedSession` to
+        get more cards in the same session rather than starting a new one.
+      x-mcp-include: true
+      x-mcp-tool-name: start_feed_session
+      x-mcp-phase: 2
+      x-mcp-mutation-risk: low
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/AgentId'
@@ -76,11 +111,23 @@ paths:
           $ref: '#/components/responses/Conflict'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/feed-sessions/{session_id}:
     get:
       tags: [Feed]
       operationId: getFeedSession
       summary: Fetch an existing feed session.
+      description: |
+        Returns the current state of an existing feed session, including
+        position, controls, applied preferences, and cards delivered so far.
+        Useful for resuming a session or for AI agents that need to inspect
+        session state across tool calls.
+      x-mcp-include: true
+      x-mcp-tool-name: get_feed_session
+      x-mcp-phase: 2
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/SessionId'
       responses:
@@ -97,6 +144,19 @@ paths:
       tags: [Feed]
       operationId: continueFeedSession
       summary: Continue a feed session with more cards.
+      description: |
+        Returns the next slice of cards for an existing feed session,
+        preserving previously applied controls. Use when a person asks for
+        "more" or "send more cards" within an active session — do not start
+        a fresh session unless intent has materially changed.
+
+        Response includes a `position` cursor counter. When `state` is
+        `complete` or `expired`, no further cards are available.
+      x-mcp-include: true
+      x-mcp-tool-name: continue_feed_session
+      x-mcp-phase: 2
+      x-mcp-mutation-risk: low
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/SessionId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -126,6 +186,22 @@ paths:
       tags: [Feed]
       operationId: updateFeedSessionControls
       summary: Apply or remove controls on an active feed session.
+      description: |
+        Updates controls on an active session and returns the updated session
+        view with re-ranked or re-filtered cards. Validates requested controls
+        against currently available options; rejects unknown options with
+        `invalid_control` (422).
+
+        Live request shape (per current behavior): a flat object whose keys
+        are control group identifiers (e.g. `interests`, `rank_mode`,
+        `tones`) and whose values are arrays (multi-select) or single
+        strings (single-select). The previous `set` / `unset` shape is
+        documented as legacy and may be removed in a future revision.
+      x-mcp-include: true
+      x-mcp-tool-name: update_feed_controls
+      x-mcp-phase: 2
+      x-mcp-mutation-risk: low
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/SessionId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -136,13 +212,16 @@ paths:
             schema:
               $ref: '#/components/schemas/ControlUpdateRequest'
             examples:
-              choose_topics:
+              flat_shape:
+                summary: Live behavior — flat object keyed by group slug
                 value:
-                  set:
-                    - topics:science
-                    - tones:good-news
-                  unset:
-                    - topics:business
+                  interests: [science]
+                  rank_mode: latest
+              legacy_set_unset:
+                summary: Legacy shape — may be deprecated; verify before relying
+                value:
+                  set: [topics:science, tones:good-news]
+                  unset: [topics:business]
       responses:
         '200':
           $ref: '#/components/responses/FeedSessionResponse'
@@ -156,11 +235,58 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/ValidationError'
+  /api/v1/streams:
+    get:
+      tags: [Discovery]
+      operationId: discoverStreams
+      summary: List available public streams.
+      description: |
+        Returns the catalog of public stream lanes (slug, label, description,
+        optional count). Clients should call this to discover streams rather
+        than hardcoding slug lists. Common slugs include `top`, `latest`,
+        `science`, `world`, `tech`, `business`, `health`, `culture`,
+        `sports`, `good-news`, `local`.
+      x-mcp-include: true
+      x-mcp-tool-name: discover_streams
+      x-mcp-phase: 1
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
+      security: []
+      responses:
+        '200':
+          description: Stream catalog.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StreamCatalog'
   /api/v1/streams/{stream_slug}:
     get:
       tags: [Discovery]
       operationId: getPublicStream
       summary: Read a public stream lane.
+      description: |
+        Returns cards from the named public stream. Anonymous-friendly and
+        cursor-paginated. For the catalog of available streams, call
+        `discoverStreams` first.
+      x-mcp-include: true
+      x-mcp-tool-name: get_stream
+      x-mcp-phase: 1
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       security: []
       parameters:
         - $ref: '#/components/parameters/StreamSlug'
@@ -168,19 +294,76 @@ paths:
         - $ref: '#/components/parameters/Cursor'
       responses:
         '200':
-          description: Public stream results.
+          description: Public stream slice.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StreamSlice'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/categories:
+    get:
+      tags: [Discovery]
+      operationId: getCategories
+      summary: Discover active content categories.
+      description: |
+        Returns the list of currently active content categories with optional
+        counts. Used by AI agents to surface category-level navigation when a
+        person asks "what topics is Chowdahh covering?".
+      x-mcp-include: true
+      x-mcp-tool-name: get_categories
+      x-mcp-phase: 1
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
+      security: []
+      responses:
+        '200':
+          description: Category list.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StreamResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CategoryList'
   /api/v1/topics/{topic_id}:
     get:
       tags: [Discovery]
       operationId: getTopic
       summary: Fetch a topic with timeline, sources, and related topics.
+      description: |
+        Returns topic detail including summary, source list, related topics,
+        and (when available) an algorithmic timeline of constituent events.
+
+        IMPORTANT: live behavior currently accepts the topic headline as the
+        path identifier (e.g. `/api/v1/topics/Artemis%20II`). Stable opaque
+        topic IDs are not yet emitted reliably to anonymous clients. AI
+        agents should treat this identifier as best-effort and prefer flows
+        where the identifier comes directly from a card or stream response.
+      x-mcp-include: true
+      x-mcp-tool-name: get_topic
+      x-mcp-phase: 1
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/TopicId'
       responses:
@@ -192,7 +375,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TopicDetail'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TopicDetail'
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/search:
@@ -200,18 +388,32 @@ paths:
       tags: [Discovery]
       operationId: search
       summary: Search topics, sources, curators, and collections.
+      description: |
+        Returns search results across the active corpus. The result list is a
+        mix of cards (story matches) and references (topic, source, curator,
+        collection matches), distinguished by `result_type`.
+
+        IMPORTANT: anonymous search results may not expose stable internal
+        identifiers usable for drill-down. AI agents should fall back to
+        cursor-based browsing when an unambiguous ID is required.
+      x-mcp-include: true
+      x-mcp-tool-name: search
+      x-mcp-phase: 1
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
+      security: []
       parameters:
         - name: q
           in: query
           required: true
+          description: Free-text query string.
           schema:
             type: string
         - name: scope
           in: query
+          description: Restrict results to a single result type.
           schema:
-            type: string
-            enum: [all, topics, sources, curators, collections]
-            default: all
+            $ref: '#/components/schemas/SearchScope'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
       responses:
@@ -223,12 +425,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SearchResults'
   /api/v1/curators/{curator_id}:
     get:
       tags: [Discovery]
       operationId: getCurator
       summary: Fetch a curator profile.
+      description: |
+        Returns the curator's identity, specialties, top topics, and
+        explanatory metadata. Use when a person asks about a curator
+        surfaced in a card response or wants more from a particular curator.
+      x-mcp-include: true
+      x-mcp-tool-name: lookup_curator
+      x-mcp-phase: 1
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/CuratorId'
       responses:
@@ -240,7 +456,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Curator'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Curator'
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/replay:
@@ -248,6 +469,18 @@ paths:
       tags: [Replay]
       operationId: getReplay
       summary: Fetch ordered card history for the authenticated person.
+      description: |
+        Returns the chronologically ordered event history for the bearer
+        principal, optionally filtered by signal type and period. Requires a
+        person token. Each event references the originating card and topic.
+
+        Note: `seen` events are server-emitted; clients do not POST `seen`
+        signals (see `recordSignals`).
+      x-mcp-include: true
+      x-mcp-tool-name: get_replay
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       parameters:
         - name: signal_type
           in: query
@@ -268,7 +501,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ReplayResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReplayData'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -278,6 +516,15 @@ paths:
       tags: [Replay]
       operationId: getActivityStats
       summary: Query aggregated activity for the authenticated person.
+      description: |
+        Returns counts and groupings over the bearer principal's signal
+        history. Use for "how much did I save this month?" or "which topics
+        do I open most?" queries.
+      x-mcp-include: true
+      x-mcp-tool-name: get_activity_stats
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       parameters:
         - name: signal_type
           in: query
@@ -290,9 +537,7 @@ paths:
         - name: group_by
           in: query
           schema:
-            type: string
-            enum: [none, topic, source, curator]
-            default: none
+            $ref: '#/components/schemas/GroupBy'
       responses:
         '200':
           description: Activity statistics.
@@ -302,12 +547,28 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ActivityStatsResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ActivityStatsData'
   /api/v1/radio-sessions:
     post:
       tags: [Radio]
       operationId: startRadioSession
       summary: Start a Chowdahh Radio session.
+      description: |
+        Creates a radio session and pre-builds a track queue from current
+        content. The returned `state` is `ready` — playback does not begin
+        until a subsequent PATCH with `action: resume`. Each track includes
+        an `audio_url` (relative path under `/audio/{track_id}`) that streams
+        `audio/mpeg`.
+      x-mcp-include: true
+      x-mcp-tool-name: start_radio_session
+      x-mcp-phase: 2
+      x-mcp-mutation-risk: low
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -316,6 +577,11 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RadioSessionStartRequest'
+            examples:
+              briefing:
+                value:
+                  mode: briefing
+                  duration_minutes: 5
       responses:
         '201':
           description: Radio session created.
@@ -325,12 +591,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RadioSessionResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RadioSessionData'
   /api/v1/radio-sessions/{radio_session_id}:
     get:
       tags: [Radio]
       operationId: getRadioSession
       summary: Fetch an existing radio session.
+      description: |
+        Returns playback state, position, queue length, and remaining tracks
+        with audio URLs.
+      x-mcp-include: true
+      x-mcp-tool-name: get_radio_session
+      x-mcp-phase: 2
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/RadioSessionId'
       responses:
@@ -342,13 +621,28 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RadioSessionResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RadioSessionData'
         '404':
           $ref: '#/components/responses/NotFound'
     patch:
       tags: [Radio]
       operationId: updateRadioSession
       summary: Update an active radio session.
+      description: |
+        Controls playback state. Valid actions are `resume` (begins or
+        resumes), `pause`, `skip`, and `stop`. State transitions:
+        `ready → playing → paused → playing → ended`. `stop` ends the
+        session immediately.
+      x-mcp-include: true
+      x-mcp-tool-name: update_radio_session
+      x-mcp-phase: 2
+      x-mcp-mutation-risk: low
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/RadioSessionId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -359,12 +653,16 @@ paths:
             schema:
               $ref: '#/components/schemas/RadioSessionUpdateRequest'
             examples:
-              pause:
+              start_playback:
+                summary: Begin playback after start.
                 value:
-                  action: pause
-              skip:
+                  action: resume
+              skip_track:
                 value:
                   action: skip
+              end_session:
+                value:
+                  action: stop
       responses:
         '200':
           description: Radio session updated.
@@ -374,12 +672,66 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RadioSessionResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RadioSessionData'
+  /audio/{track_id}:
+    get:
+      tags: [Radio]
+      operationId: getRadioTrackAudio
+      summary: Stream a single radio track as MP3.
+      description: |
+        Returns `audio/mpeg` for the named track. Audio is synthesized on
+        first request and cached. This endpoint is referenced from
+        `RadioTrack.audio_url` and is not typically called by AI agents —
+        the URL is passed to the human-facing audio surface.
+      x-mcp-include: false
+      x-mcp-phase: null
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
+      security: []
+      parameters:
+        - name: track_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MP3 audio.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/preferences/{person_id}:
     get:
       tags: [Preferences]
       operationId: getPreferences
       summary: Fetch durable Chowdahh preferences for a person.
+      description: |
+        Returns the durably-stored preferences for the named person. The
+        bearer principal must be the named person (or an admin). Cross-
+        person reads are rejected with `forbidden` (403).
+
+        IMPORTANT: only `topics_followed` is currently durably persisted.
+        `topics_avoided`, `tone_preferences`, `source_preferences`, and
+        `delivery_preferences` are accepted on writes but are not yet
+        stored. The response's `saved_preferences` reflects what was
+        actually persisted, not what was sent.
+      x-mcp-include: true
+      x-mcp-tool-name: get_preferences
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/PersonId'
       responses:
@@ -391,11 +743,37 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PreferenceSyncResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PreferenceSyncData'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
     put:
       tags: [Preferences]
       operationId: updatePreferences
       summary: Sync durable Chowdahh preferences for a person.
+      description: |
+        Replaces or merges durable preferences for the named person. The
+        bearer principal must be the named person (or an admin). Cross-
+        person writes are rejected with `forbidden` (403).
+
+        IMPORTANT: only `topics_followed` is currently durably persisted.
+        Fields other than `topics_followed` are accepted but silently
+        dropped — `saved_preferences` in the response reflects only what
+        was actually stored. AI agents should treat the persistence of
+        non-`topics_followed` fields as not yet supported.
+      x-mcp-include: true
+      x-mcp-tool-name: update_preferences
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: medium
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/PersonId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -405,6 +783,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/PreferenceSyncRequest'
+            examples:
+              follow_science:
+                value:
+                  topics_followed: [science, climate]
       responses:
         '200':
           description: Preference sync result.
@@ -414,12 +796,33 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PreferenceSyncResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PreferenceSyncData'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/submissions/items:
     post:
       tags: [Submissions]
       operationId: submitItem
       summary: Submit a single item.
+      description: |
+        Submits a single item (story, poem, image, audio, video, document)
+        for ingestion. Returns `submission_id` and a status. The submission
+        is owned by the bearer principal — the response includes
+        `submitted_by` to make ownership explicit. Optional
+        `transformation_policy` controls whether the submission is preserved
+        as-is, lightly synthesized, or fully synthesized.
+      x-mcp-include: true
+      x-mcp-tool-name: submit_item
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: high
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -428,6 +831,21 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/SubmissionItemRequest'
+            examples:
+              minimal:
+                value:
+                  title: A short notice from the field
+                  source_url: https://example.com/notice
+              full:
+                value:
+                  title: A short notice from the field
+                  source_url: https://example.com/notice
+                  kind: story
+                  creator_name: Field Reporter
+                  transformation_policy:
+                    synthesis_mode: preserve
+                    voice_preservation: preserve_verbatim
+                    media_policy: preserve_embeds
       responses:
         '202':
           description: Item accepted for processing.
@@ -437,7 +855,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SubmissionResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SubmissionData'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -451,6 +874,19 @@ paths:
       tags: [Submissions]
       operationId: submitCollection
       summary: Submit a collection or corpus.
+      description: |
+        Submits a batch of items in a single request. The submission may
+        succeed at the request level (202) while individual items are
+        skipped or rejected — inspect `accepted`, `skipped`, and `results`
+        in the response to determine per-item outcomes. Each result has its
+        own `submission_id` (or `error` on per-item failure).
+
+        Ownership is recorded on every successful child item.
+      x-mcp-include: true
+      x-mcp-tool-name: submit_collection
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: high
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -461,19 +897,42 @@ paths:
               $ref: '#/components/schemas/SubmissionCollectionRequest'
       responses:
         '202':
-          description: Collection accepted for processing.
+          description: Collection accepted; inspect per-item results.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SubmissionResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CollectionSubmissionData'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
   /api/v1/submissions/{submission_id}:
     get:
       tags: [Submissions]
       operationId: getSubmission
       summary: Get submission processing state.
+      description: |
+        Returns the current state of a submission. Includes `submitted_by`
+        for ownership transparency. The bearer principal must be the
+        submitter (or an admin) — cross-principal reads are rejected with
+        `forbidden`.
+      x-mcp-include: true
+      x-mcp-tool-name: get_submission
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: none
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/SubmissionId'
       responses:
@@ -485,7 +944,16 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SubmissionResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SubmissionData'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
   /api/v1/signals:
@@ -493,6 +961,20 @@ paths:
       tags: [Signals]
       operationId: recordSignals
       summary: Record one or more interaction signals as a batch array.
+      description: |
+        Records a batch of intentful interaction signals (`open`, `save`,
+        `share`, `dismiss`, `source_open`). The `seen` signal is server-
+        emitted only; clients should not POST it.
+
+        Invalid or unrecognized signal types are silently skipped — inspect
+        the response's `recorded` count and `skipped` array to verify
+        outcomes. A 202 status alone does not indicate that all submitted
+        signals were stored.
+      x-mcp-include: true
+      x-mcp-tool-name: record_signals
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: low
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -505,21 +987,48 @@ paths:
               maxItems: 100
               items:
                 $ref: '#/components/schemas/SignalRequest'
+            examples:
+              save_and_share:
+                value:
+                  - signal_type: save
+                    card_id: card_abc123
+                  - signal_type: share
+                    card_id: card_abc123
+                    shared_to: link
       responses:
         '202':
-          description: Signal accepted.
+          description: Signal batch processed; inspect counts.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AcceptedResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SignalsResult'
   /api/v1/feedback:
     post:
       tags: [Feedback]
       operationId: submitFeedback
       summary: Send a content request, bug report, feature request, or quality report.
+      description: |
+        Submits product- or content-directed feedback on behalf of a person.
+        Validation failures return `{error, meta}` without a `guidance`
+        block (this is an exception to the standard envelope behavior and is
+        being tracked for change in a future revision).
+
+        Use `content_request` for "send me more X" intents that are not
+        durable preferences. Use `quality_report` for issues with current
+        Chowdahh output (bad summary, wrong attribution, etc.).
+      x-mcp-include: true
+      x-mcp-tool-name: submit_feedback
+      x-mcp-phase: 3
+      x-mcp-mutation-risk: low
+      x-mcp-principal: human
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -534,16 +1043,31 @@ paths:
                   feedback_type: feature_request
                   title: Add a better handoff from replay into live feed
                   detail: When browsing prior cards, the agent should be able to jump back into send-more mode from the same topic.
+              quality_report:
+                value:
+                  feedback_type: quality_report
+                  title: Wrong attribution on TSMC card
+                  detail: The card cites Reuters but the actual source linked is Bloomberg.
+                  card_id: card_abc123
       responses:
         '202':
-          description: Feedback accepted.
+          description: Feedback received.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AcceptedResponse'
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FeedbackResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 components:
   securitySchemes:
     bearerAuth:
@@ -551,35 +1075,81 @@ components:
       scheme: bearer
       bearerFormat: Chowdahh token
       description: |
-        Supports person-scoped and curator-scoped bearer tokens.
+        Bearer tokens come in two forms:
+
+        - `ch_person_*` — person-scoped, authorizes an AI agent to act for
+          a specific person. Capabilities: feed sessions, replay/history,
+          preferences (own), feedback, personal submissions, radio.
+        - `ch_cur_*` — curator-scoped, used for higher-volume or domain-
+          specific contribution workflows. Capabilities: richer submission
+          quotas, curator attribution, higher ingestion ceilings.
+
+        The token format is recognized by prefix; the spec does not
+        distinguish the two at the operation level (both pass `bearerAuth`).
+        Curator-only tools are not yet enumerated and are reserved for a
+        future revision.
   headers:
     RequestId:
       description: Stable request identifier for debugging and support.
       schema:
         type: string
+    RateLimitLimit:
+      description: Per-window request limit for the current auth mode.
+      schema:
+        type: integer
+    RateLimitRemaining:
+      description: Requests remaining in the current window.
+      schema:
+        type: integer
+    RateLimitReset:
+      description: ISO-8601 timestamp at which the rate-limit window resets.
+      schema:
+        type: string
+        format: date-time
+    RetryAfter:
+      description: Seconds the client should wait before retrying.
+      schema:
+        type: integer
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: false
+      deprecated: true
+      description: |
+        Reserved for future use. Per `docs/api/contract-spec.md` §4.1,
+        idempotency is documented as planned but not yet wired into POST
+        handlers. AI agents should not rely on idempotent retry semantics
+        until this is confirmed live.
       schema:
         type: string
     AgentId:
       name: X-Chowdahh-Agent-Id
       in: header
       required: false
+      description: |
+        Identifier for the AI agent runtime making the request. This is the
+        AI-agent sense, not the bearer-principal sense — used for telemetry
+        and attribution, not authorization.
       schema:
         type: string
     AgentName:
       name: X-Chowdahh-Agent-Name
       in: header
       required: false
+      description: |
+        Human-readable name for the AI agent runtime (e.g., "Claude/MCP",
+        "Custom Cron Worker"). Used alongside `X-Chowdahh-Agent-Id`.
       schema:
         type: string
     ActingFor:
       name: X-Chowdahh-Acting-For
       in: header
       required: false
+      description: |
+        Optional identifier the AI agent is acting on behalf of, when the
+        operator distinguishes the bearer principal from the served person.
+        Audit metadata only; does not affect authorization.
       schema:
         type: string
     SessionId:
@@ -604,6 +1174,10 @@ components:
       name: topic_id
       in: path
       required: true
+      description: |
+        Topic identifier. Live behavior currently accepts the topic headline
+        (URL-encoded) as the identifier. Stable opaque IDs are not yet
+        emitted reliably to anonymous clients.
       schema:
         type: string
     CuratorId:
@@ -622,6 +1196,11 @@ components:
       name: stream_slug
       in: path
       required: true
+      description: |
+        Stream slug. Common values include `top`, `latest`, `science`,
+        `world`, `tech`, `business`, `health`, `culture`, `sports`,
+        `good-news`, `local`. Call `discoverStreams` for the canonical
+        catalog.
       schema:
         type: string
     Limit:
@@ -644,10 +1223,21 @@ components:
       headers:
         X-Request-Id:
           $ref: '#/components/headers/RequestId'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/FeedSessionResponse'
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/FeedSessionData'
     BadRequest:
       description: Invalid request.
       content:
@@ -660,122 +1250,383 @@ components:
                 error:
                   code: invalid_request
                   message: Request body is malformed.
+                meta:
+                  request_id: req_001
     Unauthorized:
       description: Missing or invalid credentials.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            unauthorized:
+              value:
+                error:
+                  code: unauthorized
+                  message: Bearer token missing or invalid.
+                guidance:
+                  status_explanation: This endpoint requires a person token. Sign in to create one.
+                  next_best_actions:
+                    - action_id: create_token
+                      title: Create a person token
+                      priority: primary
+                meta:
+                  request_id: req_002
     Forbidden:
       description: Authenticated but not allowed.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            cross_person:
+              value:
+                error:
+                  code: forbidden
+                  message: Bearer principal does not match the requested person_id.
+                meta:
+                  request_id: req_003
     NotFound:
       description: Resource not found.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            not_found:
+              value:
+                error:
+                  code: not_found
+                  message: No such resource.
+                meta:
+                  request_id: req_004
     Conflict:
       description: State conflict or idempotency mismatch.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            session_expired:
+              value:
+                error:
+                  code: expired_session
+                  message: This feed session is no longer active.
+                meta:
+                  request_id: req_005
     ValidationError:
       description: Semantically invalid input.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            validation:
+              value:
+                error:
+                  code: validation_error
+                  message: Title is required for feedback submissions.
+                meta:
+                  request_id: req_006
     RateLimited:
       description: Rate limited.
       headers:
         Retry-After:
-          schema:
-            type: integer
+          $ref: '#/components/headers/RetryAfter'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            rate_limited:
+              value:
+                error:
+                  code: rate_limited
+                  message: Request quota exceeded for this auth mode.
+                meta:
+                  request_id: req_007
+    ServiceUnavailable:
+      description: Temporary service issue.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            unavailable:
+              value:
+                error:
+                  code: service_unavailable
+                  message: Upstream services are temporarily unavailable. Retry shortly.
+                meta:
+                  request_id: req_008
   schemas:
+
+    # ===== Envelope and shared scaffolding =====
+
+    Envelope:
+      description: |
+        Successful responses use the `{data, guidance, meta}` envelope. The
+        `data` field's shape varies per operation and is bound by each
+        operation's response schema. `guidance` and `meta` are universal.
+      type: object
+      required: [data]
+      properties:
+        data:
+          description: Operation-specific payload.
+          type: object
+        guidance:
+          $ref: '#/components/schemas/Guidance'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    Meta:
+      type: object
+      required: [request_id]
+      properties:
+        request_id:
+          description: Stable request identifier; mirrors the `X-Request-Id` header.
+          type: string
+        next_cursor:
+          description: Opaque cursor for the next page; absent when no more pages.
+          type: string
+        has_more:
+          description: True when additional pages are available beyond this response.
+          type: boolean
+    Guidance:
+      description: |
+        Contextual guidance returned with most successful responses. The
+        block helps AI agents understand what happened and what to do next
+        without needing to hardcode flow logic. `next_best_actions` may be
+        absent or empty.
+      type: object
+      properties:
+        status_explanation:
+          description: Human-readable explanation of what happened.
+          type: string
+        next_best_actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/GuidanceAction'
+        capability_hints:
+          description: Capability flags that may inform agent behavior (e.g., "anonymous_search_no_drilldown").
+          type: array
+          items:
+            type: string
+        account_state:
+          $ref: '#/components/schemas/AccountState'
+    GuidanceAction:
+      type: object
+      required: [action_id, title]
+      properties:
+        action_id:
+          description: |
+            Stable identifier for the suggested action. Common values
+            include `send_more`, `start_radio`, `list_controls`,
+            `create_token`, `confirm_preferences`. New action_ids may
+            appear over time.
+          type: string
+        title:
+          description: Short label for surfacing the action.
+          type: string
+        why:
+          description: Optional explanation of why this action is suggested.
+          type: string
+        kind:
+          description: Optional grouping hint (e.g., "primary", "fallback", "diagnostic").
+          type: string
+        priority:
+          description: Priority hint (e.g., "primary", "secondary").
+          type: string
+        available:
+          description: |
+            Optional flag indicating whether the suggested action is
+            currently invocable. False when the action is suggested for
+            context but cannot yet be executed.
+          type: boolean
+        user_facing_prompt:
+          description: Optional natural-language prompt for re-rendering to the person.
+          type: string
+        api_hint:
+          $ref: '#/components/schemas/APIHint'
+    APIHint:
+      type: object
+      properties:
+        method:
+          type: string
+        path:
+          type: string
+    AccountState:
+      type: object
+      properties:
+        auth_mode:
+          type: string
+          enum: [anonymous, person_token, curator_token]
+        rate_limit:
+          $ref: '#/components/schemas/RateLimit'
+    RateLimit:
+      type: object
+      properties:
+        limit:
+          type: integer
+        remaining:
+          type: integer
+        reset_at:
+          type: string
+          format: date-time
+
+    # ===== Reasoning (transparency-as-feature) =====
+
+    Reasoning:
+      description: |
+        Optional structured explanation of an algorithmic decision. When
+        present, it surfaces the engine's confidence, the rule version that
+        fired, and the signals that contributed. Designed to be embedded
+        wherever the system makes a non-trivial choice (staleness verdicts,
+        ranking, supersession, search relevance, control confidence).
+
+        Fields are all optional; servers emit what they have. AI agents
+        treat absence as "no machine-readable reasoning available."
+      type: object
+      properties:
+        confidence:
+          description: Engine confidence in the decision, 0.0 to 1.0.
+          type: number
+          minimum: 0
+          maximum: 1
+        rule_version:
+          description: Version identifier of the ruleset that produced this decision.
+          type: string
+        triggered_rules:
+          description: List of rule identifiers that contributed to the decision.
+          type: array
+          items:
+            type: string
+        matched_signals:
+          description: Free-form signals that informed the decision (e.g., "title_overlap", "shared_sources").
+          type: array
+          items:
+            type: string
+        decided_at:
+          description: When the decision was made.
+          type: string
+          format: date-time
+    StalenessVerdict:
+      type: string
+      enum: [active, superseded, dissolved]
+      description: |
+        Outcome of the LLM-powered staleness triage (`docs/api/contract-spec.md` §13.2):
+
+        - `active` — cluster remains in stream rotation
+        - `superseded` — cluster has been overtaken by a successor; see `superseded_by`
+        - `dissolved` — cluster is dissolved and members are freed for re-clustering
+    SupersededBy:
+      type: object
+      description: Pointer to the successor cluster when verdict is `superseded`.
+      properties:
+        card_id:
+          type: string
+        topic_id:
+          type: string
+        headline:
+          type: string
+    SignificanceBreakdown:
+      type: object
+      description: |
+        Component breakdown of `significance_score`. Per CHD001 §10, the
+        production formula is roughly
+        `member_count + (curator_confidence × 3) + (avg_salience × 3)`.
+        Surfaced under Path C transparency: customers tuning ranking
+        behavior can read the components, not just the final score.
+      properties:
+        member_count:
+          type: integer
+        curator_confidence:
+          type: number
+        avg_salience:
+          type: number
+    SearchRelevance:
+      type: object
+      description: Optional relevance reasoning attached to a search result.
+      properties:
+        score:
+          type: number
+        matched_fields:
+          type: array
+          items:
+            type: string
+
+    # ===== Common enums =====
+
     Period:
       type: string
       enum: [today, last_7_days, this_month, last_month]
     SignalType:
       type: string
       enum: [seen, open, save, share, dismiss, source_open]
-    Guidance:
-      description: Contextual guidance returned with every response.
-      type: object
-      properties:
-        status_explanation:
-          type: string
-        next_best_actions:
-          type: array
-          items:
-            type: object
-            properties:
-              action_id:
-                type: string
-              title:
-                type: string
-              priority:
-                type: string
-              user_facing_prompt:
-                type: string
-              api_hint:
-                type: object
-                properties:
-                  method:
-                    type: string
-                  path:
-                    type: string
-        account_state:
-          type: object
-          properties:
-            auth_mode:
-              type: string
-              enum: [anonymous, person_token, curator_token]
-            rate_limit:
-              type: object
-              properties:
-                limit:
-                  type: integer
-                remaining:
-                  type: integer
-                reset_at:
-                  type: string
-                  format: date-time
+      description: |
+        - `seen` is server-emitted only — clients do not POST `seen`.
+        - The remaining values are the intentful signals AI agents may record.
+    GroupBy:
+      type: string
+      enum: [none, topic, source, curator]
+      default: none
+    SearchScope:
+      type: string
+      enum: [all, topics, sources, curators, collections, cards]
+      default: all
+    StandardErrorCode:
+      type: string
+      description: Canonical error code values per `docs/api/contract-spec.md` §6.1.
+      enum:
+        - invalid_request
+        - unauthorized
+        - forbidden
+        - not_found
+        - conflict
+        - rate_limited
+        - validation_error
+        - expired_session
+        - invalid_control
+        - processing
+        - service_unavailable
+
+    # ===== Errors =====
+
     AcceptedResponse:
       type: object
       properties:
         status:
           type: string
-          enum: [accepted]
+          enum: [accepted, received, queued]
         request_id:
           type: string
     ErrorResponse:
       type: object
+      required: [error, meta]
       properties:
         error:
           type: object
           required: [code, message]
           properties:
             code:
-              type: string
+              $ref: '#/components/schemas/StandardErrorCode'
             message:
               type: string
             details:
               type: object
               additionalProperties: true
+        guidance:
+          $ref: '#/components/schemas/Guidance'
         meta:
-          type: object
-          properties:
-            request_id:
-              type: string
+          $ref: '#/components/schemas/Meta'
+
+    # ===== Feed sessions =====
+
     FeedSessionStartRequest:
       type: object
       required: [intent]
@@ -798,7 +1649,7 @@ components:
           minimum: 1
           maximum: 20
           default: 3
-    FeedSessionResponse:
+    FeedSessionData:
       type: object
       required: [session_id, state]
       properties:
@@ -807,161 +1658,168 @@ components:
         state:
           type: string
           enum: [active, complete, expired]
-        items:
+        cards:
           type: array
           items:
-            $ref: '#/components/schemas/ContentCard'
+            $ref: '#/components/schemas/Card'
+        count:
+          description: Number of cards in this response slice.
+          type: integer
+        position:
+          description: Cursor position within the session (cumulative card count delivered so far).
+          type: integer
         controls:
           $ref: '#/components/schemas/ControlState'
         applied_preferences:
-          type: object
-          additionalProperties: true
+          $ref: '#/components/schemas/AppliedPreferences'
         why_this_set:
+          description: Optional natural-language explanation of the slice's selection logic.
           type: string
         expires_at:
           type: string
           format: date-time
-        next_cursor:
-          type: string
-        has_more:
-          type: boolean
       example:
         session_id: feed_sess_123
         state: active
-        items:
-          - card_id: card_1
-            topic_id: topic_1
+        cards:
+          - id: card_1
             headline: TSMC accelerates 1.4nm timeline
             summary: New manufacturing milestones moved the target schedule forward.
-            source_url: https://example.com/tsmc
-            source_name: Example News
-            curator_id: curator_1
-            curator_name: Tech Curator
-            transformation_status: source-led
-            topic_lenses: [science, business]
-            tone_labels: [grounded]
+            topics: [science, business]
+            source_count: 4
+            domain_count: 3
+            significance_score: 12.4
+            short_url: https://chowdahh.com/v/card_1
             canonical_url: https://chowdahh.com/t/tsmc-14nm
-            share_url: https://chowdahh.com/v/card_1
+        count: 1
+        position: 1
         controls:
-          groups:
-            - slug: topics
-              label: Topics
-              selection_mode: multi
-              options:
-                - slug: topics:science
-                  label: Science
-                  count: 12
-                  selected: true
-                  confidence: 1
+          interests: [science]
+          rank_mode: latest
         applied_preferences:
-          delivery_mode: brief
+          topics_followed: [science]
         why_this_set: Balanced, current, and aligned with saved science preference.
         expires_at: '2026-04-11T23:45:00Z'
-        next_cursor: cursor_2
-        has_more: true
-    StreamResponse:
+
+    # ===== Cards =====
+
+    Card:
       type: object
+      required: [id, headline]
       properties:
-        stream_slug:
-          type: string
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/ContentCard'
-        next_cursor:
-          type: string
-        has_more:
-          type: boolean
-    SearchResponse:
-      type: object
-      properties:
-        query:
-          type: string
-        results:
-          type: array
-          items:
-            type: object
-            properties:
-              result_type:
-                type: string
-                enum: [topic, source, curator, collection]
-              id:
-                type: string
-              title:
-                type: string
-              snippet:
-                type: string
-              url:
-                type: string
-                format: uri
-        next_cursor:
-          type: string
-        has_more:
-          type: boolean
-    ContentCard:
-      type: object
-      required: [card_id, headline]
-      properties:
-        card_id:
-          type: string
-        topic_id:
+        id:
+          description: Stable opaque card identifier.
           type: string
         headline:
           type: string
         summary:
           type: string
-        source_url:
+        lead_text:
+          description: Optional lead/intro text expanding on the headline.
           type: string
-          format: uri
-        source_name:
+        content_type:
+          description: Card content classification (e.g., "story", "synthesis", "wire").
           type: string
-        curator_id:
-          type: string
-        curator_name:
-          type: string
-        transformation_status:
-          type: string
-          enum: [source-led, lightly-synthesized, fully-synthesized]
-        topic_lenses:
+        topics:
+          description: Topic tags associated with the card.
           type: array
           items:
             type: string
-        tone_labels:
-          type: array
-          items:
-            type: string
-        canonical_url:
-          type: string
-          format: uri
-        image_url:
-          description: Hero image URL for the card, when available.
-          type: string
-          format: uri
-        share_url:
-          type: string
-          format: uri
-        source_count:
-          description: Number of distinct sources backing this card.
-          type: integer
-        domain_count:
-          description: Number of distinct domains among sources.
-          type: integer
         sources:
-          description: >-
-            Top sources backing this card. Each entry has a title, URL, and
-            optional publisher/creator name. Ordered by relevance. May be
-            truncated — use source_count for the true total.
+          description: Top sources backing this card; may be truncated, see `source_count`.
           type: array
           items:
             $ref: '#/components/schemas/SourceReference'
-    ControlState:
+        source_count:
+          description: Total distinct sources backing this card.
+          type: integer
+        domain_count:
+          description: Total distinct domains among sources.
+          type: integer
+        significance_score:
+          description: Composite relevance/significance score.
+          type: number
+        significance_breakdown:
+          $ref: '#/components/schemas/SignificanceBreakdown'
+        velocity:
+          description: Rate-of-change indicator for the underlying cluster.
+          type: number
+        image_url:
+          description: Hero image URL when available.
+          type: string
+          format: uri
+        short_url:
+          description: Short-form share URL.
+          type: string
+          format: uri
+        canonical_url:
+          description: Canonical Chowdahh URL for the card.
+          type: string
+          format: uri
+        share_url:
+          description: Pre-formatted share URL.
+          type: string
+          format: uri
+        latest_source_at:
+          description: Timestamp of the most recent source contributing to the card.
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        staleness_verdict:
+          $ref: '#/components/schemas/StalenessVerdict'
+        superseded_by:
+          $ref: '#/components/schemas/SupersededBy'
+        verdict_at:
+          description: When the most recent staleness verdict was rendered.
+          type: string
+          format: date-time
+        verdict_reasoning:
+          $ref: '#/components/schemas/Reasoning'
+    SourceReference:
       type: object
       properties:
-        groups:
+        title:
+          type: string
+        source_url:
+          type: string
+          format: uri
+        domain:
+          description: Publisher domain (e.g., "reuters.com").
+          type: string
+        creator_name:
+          type: string
+        published_at:
+          type: string
+          format: date-time
+
+    # ===== Controls =====
+
+    ControlState:
+      description: |
+        Live control state attached to a feed session. The shape is a flat
+        object whose keys are group identifiers (`interests`, `rank_mode`,
+        `tones`, `places`, etc.). Values are arrays for multi-select groups
+        and strings for single-select groups. AI agents must not invent
+        keys or values that the API did not return.
+
+        A previously documented structured shape (`groups[].options[]`) is
+        retained in `groups_legacy` for backward compatibility with prior
+        clients; it may be removed in a future revision.
+      type: object
+      additionalProperties: true
+      properties:
+        groups_legacy:
+          description: Legacy structured representation; do not rely on for new work.
           type: array
           items:
             $ref: '#/components/schemas/ControlGroup'
     ControlGroup:
+      description: Legacy structured control group shape.
       type: object
       properties:
         slug:
@@ -976,6 +1834,7 @@ components:
           items:
             $ref: '#/components/schemas/ControlOption'
     ControlOption:
+      description: Legacy structured control option shape.
       type: object
       properties:
         slug:
@@ -987,24 +1846,163 @@ components:
         selected:
           type: boolean
         confidence:
+          description: |
+            Engine confidence in this option's relevance, 0.0 to 1.0. The
+            existing first-class transparency surface; agents should treat
+            low-confidence options as soft suggestions, not exact matches.
           type: number
           minimum: 0
           maximum: 1
+        reasoning:
+          $ref: '#/components/schemas/Reasoning'
     ControlUpdateRequest:
+      description: |
+        Live shape — flat object whose keys are control group identifiers
+        and whose values are arrays (multi-select) or strings (single-
+        select). For example:
+
+            { "interests": ["science"], "rank_mode": "latest" }
+
+        Legacy `set` / `unset` arrays are accepted by some implementations;
+        prefer the flat shape above for new work.
       type: object
+      additionalProperties: true
       properties:
         set:
+          description: Legacy — list of slug-prefixed identifiers to enable.
           type: array
           items:
             type: string
+          deprecated: true
         unset:
+          description: Legacy — list of slug-prefixed identifiers to disable.
           type: array
           items:
             type: string
+          deprecated: true
+    AppliedPreferences:
+      description: |
+        Snapshot of preferences that influenced this session. Currently
+        only `topics_followed` is durably persisted; other fields are
+        accepted on writes but not yet stored.
+      type: object
+      additionalProperties: true
+      properties:
+        topics_followed:
+          type: array
+          items:
+            type: string
+        delivery_mode:
+          type: string
+
+    # ===== Streams, search, topics, curators =====
+
+    StreamCatalog:
+      type: object
+      required: [streams]
+      properties:
+        streams:
+          type: array
+          items:
+            $ref: '#/components/schemas/StreamSummary'
+    StreamSummary:
+      type: object
+      required: [slug, label]
+      properties:
+        slug:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        count:
+          description: Approximate active card count for this stream.
+          type: integer
+    StreamSlice:
+      type: object
+      required: [stream]
+      properties:
+        stream:
+          description: Slug of the requested stream.
+          type: string
+        cards:
+          type: array
+          items:
+            $ref: '#/components/schemas/Card'
+        count:
+          description: Number of cards in this response slice.
+          type: integer
+    CategoryList:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        count:
+          type: integer
+    Category:
+      type: object
+      required: [slug, label]
+      properties:
+        slug:
+          type: string
+        label:
+          type: string
+        count:
+          type: integer
+    SearchResults:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        results:
+          description: |
+            Mixed result list. Each entry's `result_type` indicates whether
+            it's a card, topic, source, curator, or collection match.
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        cards:
+          description: |
+            Some implementations return matching cards in a separate `cards`
+            array alongside (or instead of) `results`. AI agents should
+            consult both.
+          type: array
+          items:
+            $ref: '#/components/schemas/Card'
+        count:
+          type: integer
+    SearchResult:
+      type: object
+      required: [result_type, id]
+      properties:
+        result_type:
+          type: string
+          enum: [card, topic, source, curator, collection]
+        id:
+          type: string
+        title:
+          type: string
+        snippet:
+          type: string
+        url:
+          type: string
+          format: uri
+        relevance:
+          $ref: '#/components/schemas/SearchRelevance'
     TopicDetail:
       type: object
       properties:
         topic_id:
+          type: string
+        topic:
+          description: |
+            Topic identifier as known to the live API — may be a headline
+            string or stable opaque ID depending on origin (see operation
+            description).
           type: string
         headline:
           type: string
@@ -1038,22 +2036,6 @@ components:
         occurred_at:
           type: string
           format: date-time
-    SourceReference:
-      type: object
-      properties:
-        title:
-          type: string
-        source_url:
-          type: string
-          format: uri
-        domain:
-          description: Publisher domain (e.g. "reuters.com").
-          type: string
-        creator_name:
-          type: string
-        published_at:
-          type: string
-          format: date-time
     Curator:
       type: object
       properties:
@@ -1071,7 +2053,10 @@ components:
           type: array
           items:
             type: string
-    ReplayResponse:
+
+    # ===== Replay and stats =====
+
+    ReplayData:
       type: object
       properties:
         person_id:
@@ -1082,10 +2067,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ReplayEvent'
-        next_cursor:
-          type: string
-        has_more:
-          type: boolean
+        count:
+          type: integer
     ReplayEvent:
       type: object
       properties:
@@ -1104,7 +2087,7 @@ components:
         occurred_at:
           type: string
           format: date-time
-    ActivityStatsResponse:
+    ActivityStatsData:
       type: object
       properties:
         person_id:
@@ -1116,31 +2099,39 @@ components:
         items:
           type: array
           items:
-            type: object
-            properties:
-              signal_type:
-                $ref: '#/components/schemas/SignalType'
-              title:
-                type: string
-              topic_id:
-                type: string
-              source_url:
-                type: string
-                format: uri
-              occurred_at:
-                type: string
-                format: date-time
+            $ref: '#/components/schemas/ActivityItem'
         grouped_counts:
           type: array
           items:
-            type: object
-            properties:
-              key:
-                type: string
-              count:
-                type: integer
+            $ref: '#/components/schemas/GroupedCount'
+    ActivityItem:
+      type: object
+      properties:
+        signal_type:
+          $ref: '#/components/schemas/SignalType'
+        title:
+          type: string
+        topic_id:
+          type: string
+        source_url:
+          type: string
+          format: uri
+        occurred_at:
+          type: string
+          format: date-time
+    GroupedCount:
+      type: object
+      properties:
+        key:
+          type: string
+        count:
+          type: integer
+
+    # ===== Radio =====
+
     RadioSessionStartRequest:
       type: object
+      required: [mode]
       properties:
         mode:
           type: string
@@ -1168,10 +2159,9 @@ components:
         headline:
           type: string
         audio_url:
-          description: Relative URL that streams audio/mpeg for this track. Prepend the base URL to fetch.
+          description: Relative URL under `/audio/{track_id}` that streams audio/mpeg.
           type: string
         image_url:
-          description: Hero image URL for the track, when available.
           type: string
           format: uri
         topics:
@@ -1180,7 +2170,7 @@ components:
             type: string
         source_count:
           type: integer
-    RadioSessionResponse:
+    RadioSessionData:
       type: object
       properties:
         radio_session_id:
@@ -1198,28 +2188,40 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RadioTrack'
+
+    # ===== Preferences =====
+
     PreferenceSyncRequest:
       type: object
       properties:
         topics_followed:
+          description: Persisted durably as interest slugs.
           type: array
           items:
             type: string
         topics_avoided:
+          description: Accepted but not yet durably persisted.
           type: array
           items:
             type: string
+          deprecated: true
         tone_preferences:
+          description: Accepted but not yet durably persisted.
           type: array
           items:
             type: string
+          deprecated: true
         source_preferences:
+          description: Accepted but not yet durably persisted.
           type: object
           additionalProperties: true
+          deprecated: true
         delivery_preferences:
+          description: Accepted but not yet durably persisted.
           type: object
           additionalProperties: true
-    PreferenceSyncResponse:
+          deprecated: true
+    PreferenceSyncData:
       type: object
       properties:
         person_id:
@@ -1228,8 +2230,19 @@ components:
           type: string
           enum: [updated]
         saved_preferences:
+          description: |
+            What was actually persisted. Currently reflects only
+            `topics_followed`. AI agents should treat any sent field absent
+            from this response as "not stored."
           type: object
-          additionalProperties: true
+          properties:
+            topics_followed:
+              type: array
+              items:
+                type: string
+
+    # ===== Submissions =====
+
     SubmissionItemRequest:
       type: object
       required: [title, source_url]
@@ -1252,18 +2265,16 @@ components:
         transformation_policy:
           $ref: '#/components/schemas/TransformationPolicy'
     SubmissionCollectionRequest:
-      description: An array of items to submit as a batch.
+      description: |
+        Array of items to submit as a batch. Each item carries the same
+        minimum fields as a single submission. Per-item failures do not
+        fail the batch; inspect the response's `accepted`, `skipped`, and
+        `results` fields.
       type: array
       minItems: 1
+      maxItems: 500
       items:
-        type: object
-        required: [title, source_url]
-        properties:
-          title:
-            type: string
-          source_url:
-            type: string
-            format: uri
+        $ref: '#/components/schemas/SubmissionItemRequest'
     TransformationPolicy:
       type: object
       required: [synthesis_mode, voice_preservation, media_policy]
@@ -1277,8 +2288,9 @@ components:
         media_policy:
           type: string
           enum: [preserve_embeds, derive_previews, allow_transcodes]
-    SubmissionResponse:
+    SubmissionData:
       type: object
+      required: [submission_id, status, submission_kind]
       properties:
         submission_id:
           type: string
@@ -1288,6 +2300,17 @@ components:
         submission_kind:
           type: string
           enum: [item, collection]
+        submitted_by:
+          description: |
+            Identifier of the bearer principal that owns this submission.
+            For person tokens this is the `person_id`; for curator tokens
+            this is the `curator_id`. Used for ownership checks on future
+            mutation endpoints.
+          type: string
+        principal_kind:
+          description: Indicates which token type owns the submission.
+          type: string
+          enum: [person, curator]
         topic_id:
           type: string
         library_id:
@@ -1295,6 +2318,50 @@ components:
         estimated_ready_at:
           type: string
           format: date-time
+    CollectionSubmissionData:
+      type: object
+      required: [accepted, results]
+      properties:
+        accepted:
+          description: Count of items the server accepted for processing.
+          type: integer
+        skipped:
+          description: Count of items the server rejected before processing.
+          type: integer
+        submitted_by:
+          type: string
+        principal_kind:
+          type: string
+          enum: [person, curator]
+        results:
+          description: Per-item outcomes, in submission order.
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionItemResult'
+    CollectionItemResult:
+      type: object
+      required: [status]
+      properties:
+        index:
+          description: Position of the item in the original submission array.
+          type: integer
+        status:
+          type: string
+          enum: [queued, skipped, failed]
+        submission_id:
+          description: Present when the item was accepted.
+          type: string
+        error:
+          description: Present when the item was skipped or failed.
+          type: object
+          properties:
+            code:
+              $ref: '#/components/schemas/StandardErrorCode'
+            message:
+              type: string
+
+    # ===== Signals =====
+
     SignalRequest:
       type: object
       required: [signal_type, card_id]
@@ -1314,6 +2381,34 @@ components:
           type: string
         session_id:
           type: string
+    SignalsResult:
+      type: object
+      required: [recorded]
+      properties:
+        recorded:
+          description: Number of signals successfully recorded.
+          type: integer
+        skipped:
+          description: |
+            Entries that were silently dropped (e.g., unrecognized
+            `signal_type`, missing `card_id`). Empty when nothing was
+            skipped.
+          type: array
+          items:
+            $ref: '#/components/schemas/SkippedSignal'
+    SkippedSignal:
+      type: object
+      properties:
+        index:
+          description: Position in the original request array.
+          type: integer
+        signal:
+          $ref: '#/components/schemas/SignalRequest'
+        reason:
+          type: string
+
+    # ===== Feedback =====
+
     FeedbackRequest:
       type: object
       required: [feedback_type, title]
@@ -1330,4 +2425,12 @@ components:
         card_id:
           type: string
         session_id:
+          type: string
+    FeedbackResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [accepted, received, queued]
+        feedback_type:
           type: string
