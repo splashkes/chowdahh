@@ -18,6 +18,34 @@ The design is **honest about what's not yet ready** — three of the 25 tools re
 
 ---
 
+## Prior art and what this RFC contributes
+
+This RFC builds directly on the design documents already in this repo. Reading those documents in sequence, this RFC's job is small: take principles and a model that are already articulated and propose a concrete MCP-protocol surface that honors them.
+
+The RFC builds on:
+
+- **[`docs/principles.md`](../principles.md)** — the nine product principles. The 25-tool catalog is sized and shaped against Principle 4 ("Keep the surface small") and the surface inventory it enumerates. The Reasoning surfacing (below) operationalizes Principle 2 ("Preserve honest toggles") and Principle 6 ("Preserve source integrity") at the protocol level. The split between local-agent memory and Chowdahh-synced preferences (Principle 5) shapes how `update_preferences` is treated as a medium-risk mutation rather than a routine call.
+- **[`docs/model.md`](../model.md)** — the core nouns (`person`, `feed_session`, `card`, `control_state`, `replay_event`, `radio_session`, `submission`, `feedback`). Tool names follow this vocabulary directly; nothing is renamed.
+- **[`docs/ax/agent-experience.md`](../ax/agent-experience.md)** — the intended agent flows. Phase 1 / 2 / 3 grouping in the catalog mirrors the flow taxonomy described there (browse → continue → personalize → submit → feedback). The "What the agent should never need to guess" section motivates the Reasoning and provenance surfacing in tool result `_meta`.
+- **[`docs/ax/preference-memory.md`](../ax/preference-memory.md)** — the local-vs-synced state split. The MCP server forwards bearer auth and AI-agent-runtime headers but adds no new preference store; durability remains the REST server's responsibility.
+- **[`docs/api/contract-spec.md`](../api/contract-spec.md)** — the canonical narrative contract. The reconciled OpenAPI spec (audit PR) was reconciled to this document; this RFC's tool catalog is reconciled to the same.
+- **[`docs/api/ranking.md`](../api/ranking.md)** — the ranking, supersession, and staleness-triage system. This document is the substantive editorial-system specification. The "Transparency surfacing" subsection below is a thin proposal to expose the values this pipeline already computes (`significance_score`, `max_curator_confidence`, `avg_salience`, `avg_evergreen`, supersession verdicts) through the MCP surface, not to invent new ones.
+- **[`docs/api/consumption.md`](../api/consumption.md)**, **[`docs/api/radio.md`](../api/radio.md)**, **[`docs/api/submission.md`](../api/submission.md)**, **[`docs/api/feedback.md`](../api/feedback.md)**, **[`docs/api/stats-and-replay.md`](../api/stats-and-replay.md)** — endpoint-level narrative. The catalog's `start_feed_session`, `start_radio_session`, `submit_item`, `submit_feedback`, and `get_replay` tools follow these documents' shapes.
+- **[`suggestions_for_improvement.md`](../../suggestions_for_improvement.md)** — current implementation status (production deploy 2026-04-12, 18/18 SDK tests passing) and open items. The Prerequisites and Open questions sections below are reconciled against this document so that what this RFC defers matches what's already known to be open.
+
+What this RFC contributes that is not already in the design docs:
+
+1. **An MCP-protocol surface** that maps the existing REST endpoints onto MCP tools, with annotations (`destructiveHint`, `idempotentHint`) that AI-host runtimes can route on.
+2. **Five `x-mcp-*` OpenAPI extensions** (added in the audit PR) — `x-mcp-tool-name`, `x-mcp-include`, `x-mcp-phase`, `x-mcp-mutation-risk`, `x-mcp-principal` — that make tool generation mechanical and reviewable in the spec rather than embedded in code.
+3. **Phased rollout** (8 / 8 / 9) ordered by risk and prerequisite-readiness, so Phase 1 can ship independently of fixes the other phases need.
+4. **Two-principal header semantics** that distinguish the human agent (bearer principal — drives ownership and authorization) from the AI agent (`X-Chowdahh-Agent-*` headers — drives telemetry, rate-shaping, approval friction). The headers already exist in the spec; this RFC formalizes their semantics for MCP use.
+5. **Hosting and deployment shape** — Cloudflare Worker, stateless edge, `mcp.chowdahh.com/v1/mcp` URL, `claude mcp add` install path.
+6. **A Reasoning-surfacing protocol convention** — `_meta.reasoning` in MCP tool results, populated only when the underlying API emits the values. The Reasoning, StalenessVerdict, and SupersededBy schemas in the audit PR define the shape; this RFC defines the protocol-level placement.
+
+If any of items 1–6 conflicts with intent in the prior-art docs, the prior-art docs win and this RFC is wrong on that point.
+
+---
+
 ## Motivation
 
 Chowdahh's positioning is "the content layer for the agentic web." That posture demands a first-class MCP surface. AI agents already discover tools through MCP host catalogues (Claude Code, Cursor, Claude Desktop, ChatGPT-with-MCP); without an MCP server, Chowdahh is invisible to the discovery path that increasingly defines whether a content API gets used.
@@ -67,7 +95,7 @@ This dual surfacing is deliberate: text content is for the LLM's natural reading
 
 ### Tool naming
 
-`verb_object` snake_case, action-first: `start_feed_session`, `update_preferences`, `submit_item`. This convention mirrors the action vocabulary in `agent.txt` and is more expressive than Perigon's `search_<entity>` mono-pattern, which would not extend to mutations.
+`verb_object` snake_case, action-first: `start_feed_session`, `update_preferences`, `submit_item`. This convention mirrors the action vocabulary in `agent.txt` and the noun model in [`docs/model.md`](../model.md). It is more expressive than Perigon's `search_<entity>` mono-pattern, which would not extend to mutations.
 
 ### Authentication and the two-principal model
 
@@ -86,7 +114,7 @@ The MCP server itself maintains no per-connection state. If future telemetry nee
 
 ### Mutation friction
 
-The `seen` signal is **not exposed as a tool**. Per the contract spec, `seen` is server-emitted as cards are delivered; it's not the AI agent's intent. `record_signals` covers the intentful subset (`save`, `share`, `dismiss`, `open`, `source_open`).
+The `seen` signal is **not exposed as a tool**. Per [`docs/api/contract-spec.md` §7.5](../api/contract-spec.md) and [`docs/principles.md` §9](../principles.md), `seen` is intended as a delivery-confirmation event rather than an AI-agent intent. `record_signals` covers the intentful subset (`save`, `share`, `dismiss`, `open`, `source_open`).
 
 Other mutations get MCP tool annotations:
 - `destructiveHint: false` is the default for additive operations (signals, feedback)
@@ -97,9 +125,11 @@ The risk levels come from each operation's `x-mcp-mutation-risk` extension in th
 
 ### Transparency surfacing
 
-Wherever the underlying API response carries algorithmic-decision metadata — staleness verdicts, supersession pointers, significance breakdowns, search relevance, control-option confidence — the MCP server propagates it to `_meta.reasoning`. This is opt-in at the server level: when the API doesn't emit reasoning, the field is absent. The MCP server does **not** synthesize reasoning the underlying API did not provide.
+The pipeline described in [`docs/api/ranking.md`](../api/ranking.md) already computes the values an honest transparency surface needs: `significance_score` (member count + curator confidence + salience), `max_curator_confidence`, `avg_salience`, `avg_evergreen`, the supersession verdict (`active` / `superseded` / `dissolve`), and the `superseded_by` pointer. The audit PR adds a `Reasoning` schema family that gives these values a typed home.
 
-This surfacing is the lever that distinguishes this product from a black-box search API. Customers building on the MCP server can route on `_meta.reasoning.confidence`, filter on `_meta.reasoning.rule_version`, or A/B-test ranking versions — all without parsing prose.
+The MCP-side proposal is small: where the underlying API response carries those values, surface them at `_meta.reasoning` on the tool result. Where the API does not emit them, the field is absent. The MCP server does **not** synthesize reasoning the underlying API did not provide.
+
+This surfacing is the lever that distinguishes this product from a black-box search API. AI agents and the products built on them can route on `_meta.reasoning.significance_score`, follow `_meta.reasoning.superseded_by` chains, or filter on confidence — all without parsing prose. The ranking pipeline already has the answers; the MCP surface just makes them legible.
 
 ### Skills
 
