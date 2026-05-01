@@ -223,14 +223,7 @@ func (m StreamsModel) Update(msg tea.Msg) (StreamsModel, tea.Cmd) {
 			m.slugs[i] = c.Slug
 		}
 		m.list.SetItems(items)
-
-		var cmds []tea.Cmd
-		for _, c := range msg.Categories {
-			if c.Count == 0 {
-				cmds = append(cmds, fetchCategoryCount(m.client, c.Slug))
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m, nil
 
 	case CategoryCountMsg:
 		if msg.Err != nil {
