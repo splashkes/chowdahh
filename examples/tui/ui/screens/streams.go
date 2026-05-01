@@ -149,7 +149,7 @@ type StreamsModel struct {
 	height  int
 }
 
-const logoHeight = 16 // 7 bowl + 1 blank + 6 text + 2 padding
+const logoHeight = 16      // 7 bowl + 1 blank + 6 text + 2 padding
 const bottomBarsHeight = 8 // now-playing widget (~5) + status bar (1) + padding
 
 func NewStreamsModel(client *api.Client, width, height int) StreamsModel {
@@ -186,6 +186,9 @@ func fetchCategories(client *api.Client) tea.Cmd {
 			return CategoriesLoadedMsg{Categories: fallbackCategories}
 		}
 		cats := env.Data.Categories
+		if len(cats) == 0 {
+			cats = env.Data.Streams
+		}
 		if len(cats) == 0 {
 			return CategoriesLoadedMsg{Categories: fallbackCategories}
 		}

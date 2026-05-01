@@ -69,8 +69,12 @@ func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 		}
 		m.searched = true
 		if msg.Data != nil {
-			items := make([]list.Item, len(msg.Data.Cards))
-			for i, c := range msg.Data.Cards {
+			cards := msg.Data.Cards
+			if len(cards) == 0 {
+				cards = msg.Data.Results
+			}
+			items := make([]list.Item, len(cards))
+			for i, c := range cards {
 				items[i] = components.CardItem{Card: c}
 			}
 			m.results.SetItems(items)

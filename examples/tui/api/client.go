@@ -58,7 +58,7 @@ func (c *Client) GetStream(slug string, limit int, cursor string) (*Envelope[Str
 
 func (c *Client) GetCategories() (*Envelope[CategoriesData], error) {
 	var env Envelope[CategoriesData]
-	if err := c.get("/api/v1/categories", &env); err != nil {
+	if err := c.get("/api/v1/streams", &env); err != nil {
 		return nil, err
 	}
 	return &env, nil

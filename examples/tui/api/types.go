@@ -107,17 +107,20 @@ type Category struct {
 	Count int    `json:"count,omitempty"`
 }
 
-// CategoriesData is the response for GET /api/v1/categories.
+// CategoriesData is the response for stream discovery. The live API currently
+// returns "streams"; older companion builds expected "categories".
 type CategoriesData struct {
 	Categories []Category `json:"categories"`
+	Streams    []Category `json:"streams,omitempty"`
 	Count      int        `json:"count"`
 }
 
 // SearchResult is the response for GET /api/v1/search.
 type SearchResult struct {
-	Query string `json:"query"`
-	Cards []Card `json:"cards,omitempty"`
-	Count int    `json:"count"`
+	Query   string `json:"query"`
+	Cards   []Card `json:"cards,omitempty"`
+	Results []Card `json:"results,omitempty"`
+	Count   int    `json:"count"`
 }
 
 // Signal records a user interaction.
