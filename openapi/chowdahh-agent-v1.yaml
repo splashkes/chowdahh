@@ -1,21 +1,24 @@
 openapi: 3.1.0
 info:
   title: Chowdahh Agent API
-  version: 0.2.0-draft
-  summary: Full draft contract for Chowdahh's AX-first agent surface.
+  version: 1.0.0
+  summary: Chowdahh's AX-first agent surface.
   description: |
-    This specification defines the draft v1 machine contract for Chowdahh.
+    Machine contract for Chowdahh — curated news for AI agents.
 
-    Core intent groups:
-    - feed sessions
-    - replay and stats
-    - Chowdahh Radio
-    - preferences
-    - submissions
-    - feedback
+    Auth: tokens may be sent either as `Authorization: Bearer …` (any method)
+    or as `?key=…` on GET URLs (ADR-0140). Header wins on conflict. Writes
+    (POST/PATCH/PUT) must use the header. Source of truth for this spec lives
+    at https://chowdahh.com/.well-known/openapi.json.
 
-    The matching narrative contract is documented in
-    `docs/api/contract-spec.md`.
+    Public surfaces:
+    - https://chowdahh.com/api — narrative docs
+    - https://chowdahh.com/skills/ — prebuilt platform packages (Claude
+      Skill, ChatGPT GPT, Cursor/Claude Desktop MCP, Hermes/OpenClaw)
+    - https://chowdahh.com/llms.txt — LLM crawl policy + attribution rule
+
+    Citation rule: cite the original publisher from `source_urls[0]` and
+    credit chowdahh.com as the curator when summarizing.
 servers:
   - url: https://chowdahh.com
 tags:
@@ -37,7 +40,27 @@ tags:
     description: Content requests, bug reports, feature requests, and quality reports.
 security:
   - bearerAuth: []
+  - queryKey: []
+  - {}
 paths:
+  /api/v1/streams:
+    get:
+      tags: [Discovery]
+      operationId: listStreams
+      summary: List the available curated news streams.
+      description: |
+        Returns the public stream slugs (top, latest, science, world, tech,
+        business, health, culture, sports, good-news, local). Use any slug
+        with `GET /api/v1/streams/{stream_slug}`.
+      responses:
+        '200':
+          description: Stream catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StreamsListResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /api/v1/feed-sessions:
     post:
       tags: [Feed]
@@ -549,9 +572,20 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: Chowdahh token
+      bearerFormat: ch_person_* / ohp_pat_* / ch_cur_*
       description: |
-        Supports person-scoped and curator-scoped bearer tokens.
+        Supports person-scoped and curator-scoped bearer tokens. Rate limits:
+        anonymous 30/min, person token 300/min, curator token 600/min.
+    queryKey:
+      type: apiKey
+      in: query
+      name: key
+      description: |
+        GET-only paste-key auth (ADR-0140). Same tokens as bearerAuth. The
+        Authorization header wins on conflict. Writes (POST/PATCH/PUT) must
+        use the header form — query keys are ignored on non-GET methods.
+        Every /api/v1/* response sets `Referrer-Policy: no-referrer` so
+        query keys do not leak via cross-origin Referer.
   headers:
     RequestId:
       description: Stable request identifier for debugging and support.
@@ -706,13 +740,75 @@ components:
       enum: [today, last_7_days, this_month, last_month]
     SignalType:
       type: string
-      enum: [seen, open, save, share, dismiss, source_open]
+      enum:
+        - seen
+        - open
+        - save
+        - share
+        - dismiss
+        - source_open
+        - close
+        - track
+        - react
+        - dwell
+        - tts_play
+        - tts_listen
+    StreamsListResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            streams:
+              type: array
+              items:
+                type: object
+                properties:
+                  slug:
+                    type: string
+                    example: top
+                  label:
+                    type: string
+                    example: Top Stories
+                  description:
+                    type: string
+            count:
+              type: integer
+        guidance:
+          $ref: '#/components/schemas/Guidance'
+        meta:
+          type: object
+          properties:
+            request_id:
+              type: string
     Guidance:
-      description: Contextual guidance returned with every response.
+      description: |
+        Contextual guidance returned with every response. Always read this
+        block before acting on `data`. `capability_hints` explains what
+        fields mean and what is possible; `suggested_copy` is phrasing the
+        agent can use verbatim with its user; `next_best_actions` enumerates
+        concrete follow-up API calls. On 401/410/429 the actions explain
+        exactly how to recover.
       type: object
       properties:
         status_explanation:
           type: string
+        capability_hints:
+          type: array
+          description: |
+            Per-endpoint hints about field semantics and reasonable next
+            moves. Includes the citation rule on every endpoint returning
+            content: "Cite source_urls[0] and credit chowdahh.com as the
+            curator."
+          items:
+            type: string
+        suggested_copy:
+          type: array
+          description: |
+            Short phrases the agent can say verbatim to its user, in the
+            user's voice (not the system's). Optional per endpoint.
+          items:
+            type: string
         next_best_actions:
           type: array
           items:
@@ -722,8 +818,16 @@ components:
                 type: string
               title:
                 type: string
+              why:
+                type: string
+              kind:
+                type: string
+                enum: [auth_recovery, quota_recovery, continue_flow, personalize, contribute, correct, discover, upgrade]
               priority:
                 type: string
+                enum: [high, medium, low]
+              available:
+                type: boolean
               user_facing_prompt:
                 type: string
               api_hint:

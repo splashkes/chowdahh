@@ -1,4 +1,8 @@
 export class ChowdahhClient {
+  // Auth: pass `apiKey` to send it as `Authorization: Bearer <key>` on every
+  // request. Chowdahh also accepts the same token as `?key=…` on GET URLs
+  // (header wins on conflict — see ADR-0140). Use `pasteUrl()` to build a
+  // shareable URL that carries the key in the query string.
   constructor({ baseUrl, apiKey } = {}) {
     this.baseUrl = (baseUrl !== undefined ? baseUrl : "https://chowdahh.com").replace(/\/+$/, "");
     this.apiKey = apiKey || null;
@@ -6,8 +10,16 @@ export class ChowdahhClient {
 
   // --- Discovery ---
 
+  // listStreams returns the public stream catalog (slug/label/description).
+  async listStreams() {
+    return this.#request("/api/v1/streams");
+  }
+
+  // Deprecated alias: `/api/v1/categories` is not a live endpoint. Use
+  // listStreams() instead. Kept for one release as a no-op alias that calls
+  // the real endpoint.
   async getCategories() {
-    return this.#request("/api/v1/categories");
+    return this.listStreams();
   }
 
   async getStream(slug = "top", params = {}) {
@@ -139,6 +151,18 @@ export class ChowdahhClient {
 
   audioUrl(trackId) {
     return `${this.baseUrl}/audio/${encodeURIComponent(trackId)}`;
+  }
+
+  // pasteUrl builds a fully-qualified URL with the API key encoded as `?key=…`
+  // — the form an end-user can paste into an LLM (Hermes, OpenClaw, Claude,
+  // ChatGPT, Cursor MCP) without writing header-injection glue. GET only;
+  // do not use for writes.
+  pasteUrl(path, params = {}) {
+    const query = new URLSearchParams(params);
+    if (this.apiKey) query.set("key", this.apiKey);
+    const sep = path.startsWith("/") ? "" : "/";
+    const qs = query.toString();
+    return `${this.baseUrl}${sep}${path}${qs ? `?${qs}` : ""}`;
   }
 
   // --- Internal ---

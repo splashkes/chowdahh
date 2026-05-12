@@ -31,6 +31,23 @@ Note: topic and curator drill-down require true internal identifiers. Anonymous 
 - mention whether an item is synthesized or source-led
 - explain applied controls honestly
 
+## Reading guidance
+
+Every response carries a `guidance` block. Read it before acting on `data`:
+
+- `capability_hints[]` explains what fields mean and what is possible next.
+- `suggested_copy[]` is phrasing you can say verbatim.
+- `next_best_actions[]` lists concrete follow-up calls with method/path.
+
+## Citation rule
+
+When summarizing a card for the person:
+
+1. Cite the original publisher from `source_urls[0]` (or `sources[0].url`).
+2. Credit chowdahh.com as the curator — `share_url` is the canonical permalink.
+
+Both attributions are non-optional.
+
 ## Avoid
 
 - inventing control chips not returned by the API

@@ -104,3 +104,27 @@ Quality report covers cases like:
 - Keep replay/history and radio conceptually separate.
 - Preserve original attribution when surfacing or submitting content.
 - When asking follow-up questions, ask the fewest needed to move forward.
+
+## Reading the response
+
+Every response wraps `data` with a `guidance` block. Read `guidance` first.
+
+- `capability_hints[]` — what the fields mean, what is possible next.
+- `suggested_copy[]` — phrases you can say verbatim to the person.
+- `next_best_actions[]` — concrete follow-up API calls with method/path.
+- `account_state.rate_limit` — when you'll be cut off.
+
+On 401/410/429 the actions tell you exactly how to recover.
+
+## Auth shortcuts
+
+- For writes (POST/PATCH/PUT): `Authorization: Bearer <token>` only.
+- For reads (GET): `Authorization: Bearer <token>` OR `?key=<token>` in the
+  URL. The paste-key form is the one to use when a person hands an LLM a
+  single URL to fetch.
+
+## Citation rule
+
+When summarizing a Chowdahh card, cite the original publisher from
+`source_urls[0]` (or `sources[0].url`) and credit chowdahh.com as the
+curator. The reporter did the work; we curated it. Both deserve credit.

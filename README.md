@@ -89,8 +89,8 @@ chowdahh/
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/v1/streams/{slug}` | Browse a public stream (top, science, world, etc.) |
-| `GET /api/v1/categories` | Discover active content categories |
+| `GET /api/v1/streams` | List the public stream catalog (slug, label, description) |
+| `GET /api/v1/streams/{slug}` | Browse a public stream (top, latest, science, world, tech, business, health, culture, sports, good-news, local) |
 | `POST /api/v1/feed-sessions` | Start a personalized feed session |
 | `POST /api/v1/feed-sessions/{id}/more` | Continue with more cards |
 | `POST /api/v1/radio-sessions` | Start Chowdahh Radio (returns tracks with audio URLs) |
@@ -150,8 +150,46 @@ const client = new ChowdahhClient({ apiKey: "ch_person_xxx" }); // authenticated
 
 const feed = await client.getStream("top", { limit: 10 });
 const radio = await client.startRadioSession({ mode: "briefing", duration_minutes: 5 });
-const categories = await client.getCategories();
+const streams = await client.listStreams();
+
+// Build a paste-able URL that carries the key in the query string —
+// what an end-user gives to Hermes / OpenClaw / Claude / ChatGPT / Cursor.
+const pasteable = client.pasteUrl("/api/v1/streams/latest", { limit: 10 });
 ```
+
+## Authentication
+
+Two equivalent ways to send the same token:
+
+```bash
+# Header form (works on every method — required for writes):
+curl -H "Authorization: Bearer $CH_KEY" https://chowdahh.com/api/v1/streams/latest
+
+# Paste-key form (GET only — for URLs pasted into LLMs and MCP configs):
+curl "https://chowdahh.com/api/v1/streams/latest?key=$CH_KEY"
+```
+
+Header wins on conflict. POST/PATCH/PUT ignore `?key=`. Every `/api/v1/*` response sets `Referrer-Policy: no-referrer` so query keys cannot leak via cross-origin Referer.
+
+Rate limits: anonymous 30/min · person token 300/min · curator token 600/min.
+
+## Public surfaces
+
+| URL | What |
+| --- | --- |
+| `https://chowdahh.com/api` | Human-readable API page |
+| `https://chowdahh.com/.well-known/openapi.json` | Authoritative OpenAPI 3.1 spec (this repo's `openapi/chowdahh-agent-v1.yaml` should track it) |
+| `https://chowdahh.com/llms.txt` | LLM crawl policy + attribution rule |
+| `https://chowdahh.com/skills/` | Prebuilt platform packages: Claude Skill, ChatGPT GPT, Cursor / Claude Desktop MCP, Hermes/OpenClaw |
+
+## Attribution rule
+
+Every Chowdahh card is a **cluster** of corroborating articles, not a single article. When summarizing a card for the user:
+
+1. Cite the original publisher from `source_urls[0]` (they did the reporting).
+2. Credit Chowdahh as the curator — `share_url` is the canonical permalink.
+
+The same rule is repeated in `capability_hints` on every response that returns content.
 
 ## Docs
 

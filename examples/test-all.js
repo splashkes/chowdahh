@@ -35,6 +35,13 @@ console.log(`\nTesting against ${BASE}\n`);
 
 // --- Discovery ---
 
+await test("GET /streams (list)", async () => {
+  const r = await client.listStreams();
+  assert(Array.isArray(r.data.streams), "streams should be an array");
+  assert(r.data.streams.length >= 1, "should have at least one stream");
+  assert(r.data.streams.some(s => s.slug === "top"), "should include 'top'");
+});
+
 await test("GET /streams/top", async () => {
   const r = await client.getStream("top", { limit: 3 });
   assert(r.data, "missing data");
@@ -43,6 +50,33 @@ await test("GET /streams/top", async () => {
   assert(r.guidance.status_explanation, "missing status_explanation");
   assert(r.guidance.account_state, "missing account_state");
   assert(typeof r.data.count === "number", "count should be number");
+  // ADR-0142: capability hints populated on every content response.
+  assert(Array.isArray(r.guidance.capability_hints) && r.guidance.capability_hints.length > 0,
+    "expected capability_hints[] (ADR-0142)");
+});
+
+await test("paste-key GET auth (?key=) works", async () => {
+  // ADR-0140: ?key= is accepted on GET as an alternative to the bearer header.
+  // We test with the same token (if provided) by sending it as a query param
+  // and ensuring the same auth_mode comes back.
+  if (!process.env.CHOWDAHH_API_KEY) {
+    // Anonymous baseline: ?key= absent → auth_mode=anonymous.
+    const resp = await fetch(`${BASE}/api/v1/streams?limit=1`);
+    const body = await resp.json();
+    assert(body.guidance?.account_state?.auth_mode === "anonymous",
+      "expected anonymous mode without key");
+  } else {
+    const url = `${BASE}/api/v1/streams/top?limit=1&key=${encodeURIComponent(process.env.CHOWDAHH_API_KEY)}`;
+    const resp = await fetch(url);
+    const body = await resp.json();
+    assert(resp.ok, `expected 200, got ${resp.status}`);
+    assert(["person_token", "curator_token"].includes(body.guidance?.account_state?.auth_mode),
+      `expected token auth mode, got ${body.guidance?.account_state?.auth_mode}`);
+    // ADR-0140: Referrer-Policy: no-referrer must be set so the key cannot
+    // leak via cross-origin Referer.
+    assert(resp.headers.get("referrer-policy") === "no-referrer",
+      `expected Referrer-Policy: no-referrer, got ${resp.headers.get("referrer-policy")}`);
+  }
 });
 
 await test("GET /streams/science", async () => {
