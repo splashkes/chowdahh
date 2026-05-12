@@ -8,12 +8,13 @@ The skills under this directory are **function-scoped reference skills** — sma
 | `chowdahh_submit/` | Submitting items and collections. |
 | `chowdahh_preferences/` | Reading and writing person preferences. |
 | `chowdahh_feedback/` | Filing content requests, bug reports, feature requests, quality reports. |
+| `hermes-chowdahh/` | Platform-specific Hermes Agent skill package optimized for the common “pull the news” flow, with short URLs, personal newspaper composition, topic watches, and Polymarket-safe handoffs as follow-ups. |
 
-These are **examples**, not the canonical "skill packages" you ship to a platform.
+The `chowdahh_*` entries are **examples**, not the canonical "skill packages" you ship to a platform. `hermes-chowdahh/` is a platform-specific package following the Chowdahh skill contract.
 
 ## For platform-specific skill packages
 
-The canonical home is **<https://chowdahh.com/skills/>** (source: [`/skills/` in the Ohpan repo](https://github.com/)).
+The canonical home is **<https://chowdahh.com/skills/>**.
 
 That directory contains:
 
@@ -31,4 +32,4 @@ Read the canonical contract first:
 - **[SUBMITTING.md](https://chowdahh.com/skills/SUBMITTING.md)** — the 3-minute version with the PR checklist.
 - **[THIRD_PARTY.md](https://chowdahh.com/skills/THIRD_PARTY.md)** — listing your skill if you host it elsewhere.
 
-The function-scoped skills in this directory follow the same behavior contract (read `guidance`, cite sources, identify as Chowdahh) — you can copy their structure if you're building a similar reference skill.
+The function-scoped skills in this directory follow the same core behavior contract — read `guidance`, cite sources, identify user-visible output as Chowdahh — but they are not always the same default route. In particular, `hermes-chowdahh/` intentionally starts with public stream reads for the common “show me the news” flow, while `chowdahh_lookup/` demonstrates richer feed-session behavior. You can copy their structure if you're building a similar reference skill.
