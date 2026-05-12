@@ -180,7 +180,9 @@ Rate limits: anonymous 30/min · person token 300/min · curator token 600/min.
 | `https://chowdahh.com/api` | Human-readable API page |
 | `https://chowdahh.com/.well-known/openapi.json` | Authoritative OpenAPI 3.1 spec (this repo's `openapi/chowdahh-agent-v1.yaml` should track it) |
 | `https://chowdahh.com/llms.txt` | LLM crawl policy + attribution rule |
-| `https://chowdahh.com/skills/` | Prebuilt platform packages: Claude Skill, ChatGPT GPT, Cursor / Claude Desktop MCP, Hermes/OpenClaw |
+| `https://chowdahh.com/skills/` | Skill landing page: prebuilt platform packages + contract for new skills |
+| `https://chowdahh.com/skills/CONTRACT.md` | Canonical contract for incoming skills (what a Chowdahh skill is) |
+| `https://chowdahh.com/skills/SUBMITTING.md` | 3-minute guide to proposing a new skill |
 
 ## Attribution rule
 
