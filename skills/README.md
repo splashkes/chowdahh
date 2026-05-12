@@ -9,8 +9,9 @@ The skills under this directory are **function-scoped reference skills** — sma
 | `chowdahh_preferences/` | Reading and writing person preferences. |
 | `chowdahh_feedback/` | Filing content requests, bug reports, feature requests, quality reports. |
 | `hermes-chowdahh/` | Platform-specific Hermes Agent skill package optimized for the common “pull the news” flow, with short URLs, personal newspaper composition, topic watches, and Polymarket-safe handoffs as follow-ups. |
+| `lobehub-chowdahh/` | LobeHub/LobeChat agent package: profile fields, system prompt, and scheduled-task prompts for Chowdahh news, personal newspapers, topic watches, and market review. |
 
-The `chowdahh_*` entries are **examples**, not the canonical "skill packages" you ship to a platform. `hermes-chowdahh/` is a platform-specific package following the Chowdahh skill contract.
+The `chowdahh_*` entries are **examples**, not the canonical "skill packages" you ship to a platform. `hermes-chowdahh/` and `lobehub-chowdahh/` are platform-specific packages following the Chowdahh skill contract.
 
 ## For platform-specific skill packages
 
