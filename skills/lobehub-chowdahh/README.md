@@ -8,6 +8,7 @@ This is a LobeHub-optimized skill/agent package, not a Hermes `SKILL.md` package
 
 It provides:
 
+- `SKILL.md` — importable LobeHub skill entrypoint. This exists because LobeHub imports expect a `SKILL.md` in the package.
 - `agent-profile.md` — fields to paste into a LobeHub Agent Profile.
 - `system-prompt.md` — the core instruction prompt for the agent.
 - `scheduled-tasks.md` — LobeHub Scheduled Task prompts for personal newspaper and topic watches.
@@ -73,6 +74,7 @@ The agent must:
 
 ```text
 lobehub-chowdahh/
+├── SKILL.md
 ├── README.md
 ├── agent-profile.md
 ├── system-prompt.md
